@@ -3,6 +3,7 @@ import os
 import re
 import time
 import asyncio
+from pathlib import Path
 
 import openai
 import pptx
@@ -14,10 +15,20 @@ CONTENT = [
 ERROR_MESSAGE = "Something is wrong:"
 ENGINE_MODEL = "gpt-3.5-turbo"
 WRITE_TO_FILE_MODE = 'w'
+UPLOADS_DIR = "uploads"
+OUTPUTS_DIR = "outputs"
 
 
 async def parse_file_to_slides(file_path):
-    # Parses a PowerPoint file and extracts the content of each slide
+    """
+    Parse the PowerPoint presentation file and extract slides.
+
+    Args:
+        file_path (str): Path to the PowerPoint file.
+
+    Returns:
+        list: List of slides, where each slide is a list of text content.
+    """
     ppt = await asyncio.to_thread(pptx.Presentation, file_path)
     slides = []
 
@@ -37,7 +48,15 @@ async def parse_file_to_slides(file_path):
 
 
 async def explain_slides(slides):
-    # Generates explanations for each slide using the OpenAI API
+    """
+    Generate explanations for each slide.
+
+    Args:
+        slides (list): List of slides, where each slide is a list of text content.
+
+    Returns:
+        list: List of explanations for each slide.
+    """
     explanations = []
 
     for slide in slides:
@@ -48,7 +67,15 @@ async def explain_slides(slides):
 
 
 async def parse_slide_of_pptx(slide):
-    # Parses the content of a slide and sends it to the OpenAI API for completion
+    """
+    Parse a single slide of a PowerPoint presentation.
+
+    Args:
+        slide (list): List of text content in the slide.
+
+    Returns:
+        str: Explanation of the slide.
+    """
     try:
         response = await request_completion(slide)
         return response
@@ -58,7 +85,15 @@ async def parse_slide_of_pptx(slide):
 
 
 async def request_completion(slide):
-    # Sends the slide content to the OpenAI API for completion and returns the generated response
+    """
+    Send slide content to OpenAI's Chat API to generate explanations.
+
+    Args:
+        slide (list): List of text content in the slide.
+
+    Returns:
+        str: Generated explanation for the slide.
+    """
     CONTENT.append({"role": "user", "content": " ".join(slide)})
     try:
         response = openai.ChatCompletion.create(
@@ -74,30 +109,44 @@ async def request_completion(slide):
 
 
 def modify_file(explanations, presentation_path):
-    # Modifies the file to store the slide explanations in a JSON format
+    """
+    Modify the file path and save explanations as JSON.
+
+    Args:
+        explanations (list): List of explanations for each slide.
+        presentation_path (str): Path to the original presentation file.
+    """
     try:
         presentation_name = os.path.basename(presentation_path)
         presentation_name = os.path.splitext(presentation_name)[0]
-        output_file = f"{presentation_name}_explanations.json"
+        output_file = os.path.join(OUTPUTS_DIR, f"{presentation_name}_explanations.json")
 
+        # Create a dictionary with slide numbers as keys and explanations as values
         slide_explanations = {f"slide{slide_num}": explanation for slide_num, explanation in enumerate(explanations, start=1)}
-
+        # Save the slide explanations as JSON
         with open(output_file, WRITE_TO_FILE_MODE) as file:
             json.dump(slide_explanations, file, indent=4)
-        print(f"Explanations saved to {output_file}")
+            print(f"Explanations saved to {output_file}")
     except FileNotFoundError as error:
         print(f"{ERROR_MESSAGE} Error saving explanations: {str(error)}")
 
 
-async def activate_main():
-    # Orchestrates the main flow of the program
-    presentation_path = "Presentation_Path"  # Specify the path to your PowerPoint presentation
-    print("Processing PowerPoint...")
+async def process_file(file_path):
+    """
+    Process a single file by parsing slides, generating explanations, and saving the results.
+
+    Args:
+        file_path (str): Path to the PowerPoint file.
+    """
+    print(f"Processing file: {file_path}")
     start_time = time.time()
 
-    slides = await parse_file_to_slides(presentation_path)
+    # Parse the file to extract slides
+    slides = await parse_file_to_slides(file_path)
+    # Generate explanations for each slide
     explanations = await explain_slides(slides)
-    modify_file(explanations, presentation_path)
+    # Save the explanations to a file
+    modify_file(explanations, file_path)
 
     end_time = time.time()
     execution_time = end_time - start_time
@@ -105,9 +154,37 @@ async def activate_main():
     print(f"Execution time: {minutes:.0f} minutes {seconds:.2f} seconds")
 
 
+async def process_files_in_uploads():
+    """
+    Process files in the uploads directory in an infinite loop.
+    """
+    uploads_path = Path(UPLOADS_DIR)
+    processed_files = set()
+
+    while True:
+        for file_path in uploads_path.glob("*"):
+            if file_path.is_file() and file_path not in processed_files:
+                await process_file(file_path)
+                processed_files.add(file_path)
+
+        await asyncio.sleep(10)
+
+
 async def main():
-    openai.api_key = 'API-KEY'  # Replace with your OpenAI API key
-    await activate_main()
+    """
+    Main function to initiate file processing and setup necessary directories.
+
+    Returns:
+        int: Exit status (0 for success).
+    """
+    openai.api_key = 'Api-Key'
+
+    # Create the uploads and outputs directories if they don't exist
+    Path(UPLOADS_DIR).mkdir(parents=True, exist_ok=True)
+    Path(OUTPUTS_DIR).mkdir(parents=True, exist_ok=True)
+
+    await process_files_in_uploads()
+
     return EXIT_SUCCESS
 
 
