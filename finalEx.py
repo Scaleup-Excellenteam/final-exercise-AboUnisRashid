@@ -141,6 +141,10 @@ async def process_file(file_path):
     print(f"Processing file: {file_path}")
     start_time = time.time()
 
+    if file_path.name == ".DS_Store":
+        print("Skipping .DS_Store file")
+        return
+
     # Parse the file to extract slides
     slides = await parse_file_to_slides(file_path)
     # Generate explanations for each slide
@@ -154,6 +158,7 @@ async def process_file(file_path):
     print(f"Execution time: {minutes:.0f} minutes {seconds:.2f} seconds")
 
 
+
 async def process_files_in_uploads():
     """
     Process files in the uploads directory in an infinite loop.
@@ -162,10 +167,16 @@ async def process_files_in_uploads():
     processed_files = set()
 
     while True:
-        for file_path in uploads_path.glob("*"):
-            if file_path.is_file() and file_path not in processed_files:
-                await process_file(file_path)
-                processed_files.add(file_path)
+        files = uploads_path.glob("*")
+        files = [file_path for file_path in files if file_path.is_file() and file_path not in processed_files]
+        if not files:
+            print("No files found in the uploads directory. Waiting for new files...")
+            await asyncio.sleep(10)
+            continue
+
+        for file_path in files:
+            await process_file(file_path)
+            processed_files.add(file_path)
 
         await asyncio.sleep(10)
 
@@ -177,7 +188,7 @@ async def main():
     Returns:
         int: Exit status (0 for success).
     """
-    openai.api_key = 'Api-Key'
+    openai.api_key = 'API_KEY'
 
     # Create the uploads and outputs directories if they don't exist
     Path(UPLOADS_DIR).mkdir(parents=True, exist_ok=True)
