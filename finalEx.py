@@ -200,7 +200,7 @@ async def main():
     Returns:
         int: Exit status (0 for success).
     """
-    openai.api_key = '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'
+    openai.api_key = 'API_KEY'
 
     # Create the uploads and outputs directories if they don't exist
     Path(UPLOADS_DIR).mkdir(parents=True, exist_ok=True)
