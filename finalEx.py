@@ -4,9 +4,12 @@ import re
 import time
 import asyncio
 from pathlib import Path
-
+from datetime import datetime
 import openai
 import pptx
+
+from db import create_session
+from model import Upload
 
 EXIT_SUCCESS = 0
 CONTENT = [
@@ -17,6 +20,9 @@ ENGINE_MODEL = "gpt-3.5-turbo"
 WRITE_TO_FILE_MODE = 'w'
 UPLOADS_DIR = "uploads"
 OUTPUTS_DIR = "outputs"
+
+
+session = create_session()
 
 
 async def parse_file_to_slides(file_path):
@@ -119,7 +125,7 @@ def modify_file(explanations, presentation_path):
     try:
         presentation_name = os.path.basename(presentation_path)
         presentation_name = os.path.splitext(presentation_name)[0]
-        output_file = os.path.join(OUTPUTS_DIR, f"{presentation_name}_explanations.json")
+        output_file = os.path.join(OUTPUTS_DIR, f"{presentation_name}.json")
 
         # Create a dictionary with slide numbers as keys and explanations as values
         slide_explanations = {f"slide{slide_num}": explanation for slide_num, explanation in enumerate(explanations, start=1)}
@@ -131,28 +137,38 @@ def modify_file(explanations, presentation_path):
         print(f"{ERROR_MESSAGE} Error saving explanations: {str(error)}")
 
 
-async def process_file(file_path):
+async def process_file(upload_id):
     """
     Process a single file by parsing slides, generating explanations, and saving the results.
 
     Args:
         file_path (str): Path to the PowerPoint file.
     """
-    print(f"Processing file: {file_path}")
+
     start_time = time.time()
 
-    if file_path.name == ".DS_Store":
-        print("Skipping .DS_Store file")
+    upload = session.get(Upload, upload_id)
+
+    if upload is None:
+        print(f"Upload with ID '{upload_id}' not found")
         return
 
+    presentation_path = f"{UPLOADS_DIR}/{upload.uid}.pptx"
+    print(presentation_path)
+
     # Parse the file to extract slides
-    slides = await parse_file_to_slides(file_path)
+    slides = await parse_file_to_slides(presentation_path)
     # Generate explanations for each slide
     explanations = await explain_slides(slides)
     # Save the explanations to a file
-    modify_file(explanations, file_path)
-
+    modify_file(explanations, presentation_path)
     end_time = time.time()
+
+    upload.status = 'completed'
+    upload.finish_time = datetime.now()
+
+    session.commit()
+
     execution_time = end_time - start_time
     minutes, seconds = divmod(execution_time, 60)
     print(f"Execution time: {minutes:.0f} minutes {seconds:.2f} seconds")
@@ -163,20 +179,16 @@ async def process_files_in_uploads():
     """
     Process files in the uploads directory in an infinite loop.
     """
-    uploads_path = Path(UPLOADS_DIR)
-    processed_files = set()
+    # uploads_path = Path(UPLOADS_DIR)
+    # processed_files = set()
 
     while True:
-        files = uploads_path.glob("*")
-        files = [file_path for file_path in files if file_path.is_file() and file_path not in processed_files]
-        if not files:
-            print("No files found in the uploads directory. Waiting for new files...")
-            await asyncio.sleep(10)
-            continue
 
-        for file_path in files:
-            await process_file(file_path)
-            processed_files.add(file_path)
+        pending_uploads = session.query(Upload).filter_by(status="pending").all()
+
+        for upload in pending_uploads:
+            upload_id = upload.id
+            await process_file(upload_id)
 
         await asyncio.sleep(10)
 
@@ -188,7 +200,7 @@ async def main():
     Returns:
         int: Exit status (0 for success).
     """
-    openai.api_key = 'API_KEY'
+    openai.api_key = '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'
 
     # Create the uploads and outputs directories if they don't exist
     Path(UPLOADS_DIR).mkdir(parents=True, exist_ok=True)

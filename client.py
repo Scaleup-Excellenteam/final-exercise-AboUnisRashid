@@ -4,7 +4,7 @@ import asyncio
 API_BASE_URL = "http://localhost:5000"  # Replace with the appropriate base URL
 
 
-async def upload_file(file_path):
+async def upload_file(file_path, email = None):
     """
     Asynchronously uploads a file to the server.
 
@@ -14,11 +14,15 @@ async def upload_file(file_path):
     Returns:
         str: The UID (unique identifier) of the uploaded file.
     """
-    upload_url = f"{API_BASE_URL}/upload"
+
 
     async with aiohttp.ClientSession() as session:
+        upload_url = f"{API_BASE_URL}/upload"
+        form = aiohttp.FormData()
+        form.add_field("email", email) if email else None
+        form.add_field("file", open(file_path, "rb"))
         # Open the file in binary mode and send it as multipart/form-data
-        async with session.post(upload_url, data=aiohttp.FormData({"file": open(file_path, "rb")})) as response:
+        async with session.post(upload_url, data=form) as response:
             if response.status == 200:
                 data = await response.json()
                 uid = data["uid"]
@@ -29,7 +33,7 @@ async def upload_file(file_path):
     return None
 
 
-async def check_status(uid):
+async def check_status(uid = None, fileName = None, email = None):
     """
     Asynchronously checks the status of a file until the explanation is ready.
 
@@ -39,15 +43,23 @@ async def check_status(uid):
     Returns:
         None
     """
-    status_url = f"{API_BASE_URL}/status/{uid}"
+    status_url = f"{API_BASE_URL}/status"
+    params = {}
+
+    if uid:
+        params["uid"] = uid
+    elif fileName and email:
+        params["filename"] = fileName
+        params["email"] = email
+
     print(uid)
     async with aiohttp.ClientSession() as session:
         while True:
-            async with session.get(status_url) as response:
+            async with session.get(status_url, params=params) as response:
                 if response.status == 200:
                     data = await response.json()
                     status = data["status"]
-                    if status == "done":
+                    if status == "completed":
                         filename = data["filename"]
                         timestamp = data["timestamp"]
                         explanation = data["explanation"]
@@ -69,13 +81,15 @@ async def main():
     """
     Asynchronous main function that uploads a file and checks its status.
     """
-    file_path = "Presentation_path"
+    file_path = input("Enter the file path: ")
+    email = input("Enter the email: ")
 
     # Upload the file asynchronously
-    uid = await upload_file(file_path)
+    uid = await upload_file(file_path, email)
+    print(uid)
 
     # Check the status of the file asynchronously until the explanation is ready
-    await check_status(uid)
+    await check_status(uid, file_path, email)
 
 
 if __name__ == "__main__":

@@ -1,13 +1,20 @@
+import json
+import os
+
 from flask import Flask, request, jsonify
 from pathlib import Path
 import datetime
 import uuid
+from db import create_session
+
+from model import Upload, User
 
 UPLOADS_DIR = "uploads"
 OUTPUTS_DIR = "outputs"
 
 
 app = Flask(__name__)
+session = create_session()
 
 
 @app.route("/upload", methods=["POST"])
@@ -25,19 +32,38 @@ def upload():
     uploaded_file = request.files["file"]
 
     # Create a filename with the original filename, timestamp, and UID
-    filename = f"{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{uid}_{uploaded_file.filename}"
+    filename = f"{uid}.pptx"
     print(filename)
 
     # Save the file in the uploads folder
     file_path = Path(UPLOADS_DIR) / filename
     uploaded_file.save(file_path)
 
+    timestamp = datetime.datetime.now()
+
+    email = request.form.get("email")
+    user = None
+
+    if email:
+        # Query the User table for the user with the specified email
+        user = session.query(User).filter_by(email=email).first()
+        if not user:
+            # User not found, create a new user
+            user = User(email=email)
+            session.add(user)
+            session.commit()
+
+    # Create an Upload object and commit it to the database
+    uploadd = Upload(uid=uid, filename=filename, upload_time=timestamp, status="pending", user=user)
+    session.add(uploadd)
+    session.commit()
+
     # Return the UID as JSON response
     return jsonify({"uid": uid})
 
 
-@app.route("/status/<uid>", methods=["GET"])
-def status(uid):
+@app.route("/status", methods=["GET"])
+def status():
     """
     Endpoint for checking the status of a file.
 
@@ -47,51 +73,53 @@ def status(uid):
     Returns:
         str: JSON response with the status, filename, timestamp, hall name, and explanation.
     """
-    # Check if the file exists in the uploads folder
-    file_path = next(Path(UPLOADS_DIR).glob(f"*_{uid}_*"), None)
-    print(file_path)
-    if file_path is None:
-        # File not found
-        return jsonify({
-            "status": "not found",
-            "filename": None,
-            "timestamp": None,
-            "hall_name": None,
-            "explanation": None
-        }), 404
+    uid = request.args.get('uid')
+    filename = request.args.get('filename')
+    email = request.args.get('email')
+    upload = None
+
+    if uid:
+        upload = session.query(Upload).filter_by(uid=uid).first()
+    elif filename and email:
+        user = session.query(User).filter_by(email=email).first()
+        upload = (
+            session.query(Upload)
+            .filter_by(filename=filename, user=user)
+            .order_by(Upload.upload_time.desc())
+            .first()
+        )
+
+    if not upload:
+        return jsonify({"error": "Upload not found"}), 404    # Retrieve the status, filename, and timestamp
+
+    status = upload.status
+    filename = upload.filename
+    timestamp = upload.upload_time
+    # Check if the upload has finished processing
+    # explanation = ""
+    if status == "completed":
+        explanation_file = os.path.join(OUTPUTS_DIR, f"{uid}.json")
+        if os.path.exists(explanation_file):
+            with open(explanation_file, "r") as f:
+                explanation_data = json.load(f)
+
+            explanations = []
+            for slide_key in explanation_data:
+                explanation = explanation_data[slide_key]
+                explanations.append(explanation)
+
+            explanation = "\n".join(explanations)
+    elif status == "failed":
+        explanation = "Processing failed"
     else:
-        # Extract the filename, timestamp, and generate the output file path
-        filename_parts = file_path.stem.split("_")
-        original_filename = "_".join(filename_parts[2:])
-        timestamp = filename_parts[0]
+        explanation = "Processing in progress"
 
-        # Extract the hall name from the original filename
-        hall_name = original_filename.split("_")[0]
-
-        output_file_path = next(Path(OUTPUTS_DIR).glob(f"*_{uid}_*.json"), None)
-        print(output_file_path)
-
-        if output_file_path.exists():
-            # File has been processed, read the explanations from the output file
-            with open(output_file_path, "r") as file:
-                explanations = file.read()
-
-            return jsonify({
-                "status": "done",
-                "filename": original_filename,
-                "timestamp": timestamp,
-                "hall_name": hall_name,  # Include the hall name in the response
-                "explanation": explanations
-            })
-        else:
-            # File is still pending processing
-            return jsonify({
-                "status": "pending",
-                "filename": original_filename,
-                "timestamp": timestamp,
-                "hall_name": hall_name,  # Include the hall name in the response
-                "explanation": None
-            })
+    return jsonify({
+        "status": status,
+        "filename": filename,
+        "timestamp": timestamp,
+        "explanation": explanation
+    }), 200
 
 
 if __name__ == "__main__":
